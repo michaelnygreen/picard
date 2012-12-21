@@ -187,6 +187,8 @@ class ID3File(File):
                 for role, name in frame.people:
                     if role in self.__tipl_roles and name:
                         metadata.add(self.__tipl_roles[role], name)
+                    elif role or name:
+                        metadata.add('performer:%s' % role, name)
             elif frameid == 'TXXX':
                 if frame.desc in self.__translate_freetext:
                     name = self.__translate_freetext[frame.desc]
