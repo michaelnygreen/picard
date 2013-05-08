@@ -125,20 +125,24 @@ class File(QtCore.QObject, Item):
         self.orig_metadata.copy(metadata)
         self.metadata = metadata
 
+    _default_preserved_tags = [
+        "~bitrate", "~bits_per_sample", "~format", "~channels", "~filename",
+        "~dirname", "~extension"
+    ]
+
     def copy_metadata(self, metadata):
         acoustid = self.metadata["acoustid_id"]
         preserve = self.config.setting["preserved_tags"].strip()
-        if preserve:
-            saved_metadata = {}
-            for tag in re.split(r"\s+", preserve):
-                values = self.orig_metadata.getall(tag)
-                if values:
-                    saved_metadata[tag] = values
-            self.metadata.copy(metadata)
-            for tag, values in saved_metadata.iteritems():
-                self.metadata.set(tag, values)
-        else:
-            self.metadata.copy(metadata)
+        saved_metadata = {}
+
+        for tag in re.split(r"\s+", preserve) + File._default_preserved_tags:
+            values = self.orig_metadata.getall(tag)
+            if values:
+                saved_metadata[tag] = values
+        self.metadata.copy(metadata)
+        for tag, values in saved_metadata.iteritems():
+            self.metadata.set(tag, values)
+
         self.metadata["acoustid_id"] = acoustid
 
     def has_error(self):
@@ -215,8 +219,8 @@ class File(QtCore.QObject, Item):
             self.base_filename = os.path.basename(new_filename)
             length = self.orig_metadata.length
             temp_info = {}
-            for info in ('~#bitrate', '~#sample_rate', '~#channels',
-                         '~#bits_per_sample', '~format'):
+            for info in ('~bitrate', '~sample_rate', '~channels',
+                         '~bits_per_sample', '~format'):
                 temp_info[info] = self.orig_metadata[info]
             if self.config.setting["clear_existing_tags"]:
                 self.orig_metadata.copy(self.metadata)
@@ -248,13 +252,13 @@ class File(QtCore.QObject, Item):
                 metadata[name] = sanitize_filename(metadata[name])
         format = format.replace("\t", "").replace("\n", "")
         filename = ScriptParser().eval(format, metadata, self)
-        # replace incompatible characters
-        if settings["windows_compatible_filenames"] or sys.platform == "win32":
-            filename = replace_win32_incompat(filename)
         if settings["ascii_filenames"]:
             if isinstance(filename, unicode):
                 filename = unaccent(filename)
             filename = replace_non_ascii(filename)
+        # replace incompatible characters
+        if settings["windows_compatible_filenames"] or sys.platform == "win32":
+            filename = replace_win32_incompat(filename)
         # remove null characters
         filename = filename.replace("\x00", "")
         return filename
@@ -349,6 +353,13 @@ class File(QtCore.QObject, Item):
                 image_filename = "%s (%d)" % (filename, counters[filename])
                 counters[filename] = counters[filename] + 1
             else:
+                new_filename = image_filename + ext
+                # Even if overwrite is enabled we don't need to write the same
+                # image multiple times
+                if (os.path.exists(new_filename) and
+                    os.path.getsize(new_filename) == len(data)):
+                        self.log.debug("Identical file size, not saving %r", image_filename)
+                        return
                 self.log.debug("Saving cover images to %r", image_filename)
                 new_dirname = os.path.dirname(image_filename)
                 if not os.path.isdir(new_dirname):
@@ -462,13 +473,13 @@ class File(QtCore.QObject, Item):
         if hasattr(file.info, 'length'):
             metadata.length = int(file.info.length * 1000)
         if hasattr(file.info, 'bitrate') and file.info.bitrate:
-            metadata['~#bitrate'] = file.info.bitrate / 1000.0
+            metadata['~bitrate'] = file.info.bitrate / 1000.0
         if hasattr(file.info, 'sample_rate') and file.info.sample_rate:
-            metadata['~#sample_rate'] = file.info.sample_rate
+            metadata['~sample_rate'] = file.info.sample_rate
         if hasattr(file.info, 'channels') and file.info.channels:
-            metadata['~#channels'] = file.info.channels
+            metadata['~channels'] = file.info.channels
         if hasattr(file.info, 'bits_per_sample') and file.info.bits_per_sample:
-            metadata['~#bits_per_sample'] = file.info.bits_per_sample
+            metadata['~bits_per_sample'] = file.info.bits_per_sample
         metadata['~format'] = self.__class__.__name__.replace('File', '')
         self._add_path_to_metadata(metadata)
 
@@ -549,7 +560,9 @@ class File(QtCore.QObject, Item):
             self.tagger.move_file_to_nat(self, track.id, node=track)
 
     def lookup_metadata(self):
-        """ Try to identify the file using the existing metadata. """
+        """Try to identify the file using the existing metadata."""
+        if self.lookup_task:
+            return
         self.tagger.window.set_statusbar_message(N_("Looking up the metadata for file %s..."), self.filename)
         self.clear_lookup_task()
         metadata = self.metadata
